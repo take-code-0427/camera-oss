@@ -21,6 +21,7 @@ The repository uses a modern `uv`-first Python workflow:
 
 - Python 3.12 pinned by `.python-version`
 - `pyproject.toml` as the dependency/configuration source of truth
+- `uv.lock` committed for reproducible dependency resolution
 - `uv` for Python, virtualenv, dependency management, execution and builds
 - PEP 735 dependency groups for development tools
 - `uv_build` as the build backend
@@ -28,7 +29,7 @@ The repository uses a modern `uv`-first Python workflow:
 - ty for static type checking
 - pytest for tests
 - GitHub Actions using `astral-sh/setup-uv`
-- Docker using the official uv binary and `uv sync`
+- Docker using the official uv binary and frozen lockfile installs
 
 ## Quick start
 
@@ -38,7 +39,7 @@ Install uv, then:
 git clone https://github.com/take-code-0427/camera-oss.git
 cd camera-oss
 
-uv sync
+uv sync --frozen
 cp config.example.yaml config.yaml
 uv run flowcam run --config config.yaml
 ```
@@ -54,14 +55,14 @@ The first inference run downloads the configured Ultralytics model weights.
 ## Development
 
 ```bash
-uv sync --all-groups
+uv sync --frozen --all-groups
 uv run ruff check .
 uv run ruff format .
 uv run ty check src tests
 uv run pytest
 ```
 
-Add dependencies with uv rather than editing lock state manually:
+Use uv to change dependencies:
 
 ```bash
 uv add httpx
@@ -70,7 +71,7 @@ uv remove httpx
 uv lock
 ```
 
-`uv.lock` should be committed after dependency resolution so local development, CI and Docker use the same resolved graph.
+Commit both `pyproject.toml` and the regenerated `uv.lock` after dependency changes. CI and Docker use `--frozen`, so they fail rather than silently changing the resolved dependency graph.
 
 ## Architecture
 
@@ -224,7 +225,7 @@ A public livestream being technically accessible does not automatically grant ri
 docker compose up --build
 ```
 
-The image uses the official uv binary and `uv sync`; it does not install the application with pip.
+The image copies `pyproject.toml` and `uv.lock`, then installs with `uv sync --frozen`; it does not resolve dependencies during the build or install the application with pip.
 
 ## Next steps
 
