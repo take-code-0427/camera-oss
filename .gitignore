@@ -6,3 +6,5 @@ config.yaml
 data/
 *.db
 .DS_Store
+*.mp4
+*.pt

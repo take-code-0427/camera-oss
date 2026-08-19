@@ -166,7 +166,7 @@ Swap `a` and `b` if `in` and `out` are reversed.
 ### 3. Start FlowCam
 
 ```bash
-uv run flowcam run --config config.yaml
+uv run flowcam --config config.yaml
 ```
 
 The first inference run may download the configured Ultralytics model weights.
@@ -331,7 +331,7 @@ camera:
 Then run the same checks as Phase 1:
 
 ```bash
-uv run flowcam run --config config.yaml
+uv run flowcam --config config.yaml
 curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/api/v1/metrics/latest
 ```

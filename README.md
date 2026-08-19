@@ -41,7 +41,7 @@ cd camera-oss
 
 uv sync --frozen
 cp config.example.yaml config.yaml
-uv run flowcam run --config config.yaml
+uv run flowcam --config config.yaml
 ```
 
 Open:
