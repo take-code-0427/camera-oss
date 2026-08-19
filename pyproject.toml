@@ -19,8 +19,16 @@ dependencies = [
   "typer>=0.16,<1",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<9",
+]
+
 [project.scripts]
 flowcam = "flowcam.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/flowcam"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
