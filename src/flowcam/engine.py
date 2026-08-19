@@ -1,152 +1,129 @@
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 
-from .analytics import FlowAnalytics, TrackObservation
+from .analytics import FlowAnalytics
 from .config import AppConfig
-from .storage import Storage
+from .domain import Frame, MetricSample
+from .ports import FrameSource, MetricsSink, PersonTracker
 
 
 class FlowEngine:
-    def __init__(self, config: AppConfig, storage: Storage):
+    def __init__(
+        self,
+        config: AppConfig,
+        source: FrameSource,
+        tracker: PersonTracker,
+        sink: MetricsSink,
+    ):
         self.config = config
-        self.storage = storage
+        self.source = source
+        self.tracker = tracker
+        self.sink = sink
         self.analytics = FlowAnalytics(config.camera.id, config.analytics)
-        self.model = YOLO(config.inference.model)
-        self.latest_metric: dict = {
-            "camera_id": config.camera.id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "visible_people": 0,
-            "roi_occupancy": 0,
-            "flow_in": 0,
-            "flow_out": 0,
-        }
-        self.latest_jpeg: bytes | None = None
-        self.lock = threading.Lock()
-        self.stop_event = threading.Event()
-        self.thread: threading.Thread | None = None
+        self._latest_metric = MetricSample(
+            camera_id=config.camera.id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            visible_people=0,
+            roi_occupancy=0,
+            flow_in=0,
+            flow_out=0,
+        )
+        self._latest_jpeg: bytes | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._stopping = asyncio.Event()
 
-    def start(self) -> None:
-        if self.thread and self.thread.is_alive():
+    async def start(self) -> None:
+        if self._task and not self._task.done():
             return
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self._run, daemon=True, name="flowcam-engine")
-        self.thread.start()
+        self._stopping.clear()
+        self._task = asyncio.create_task(self._run(), name="flowcam-engine")
 
-    def stop(self) -> None:
-        self.stop_event.set()
-        if self.thread:
-            self.thread.join(timeout=3)
+    async def stop(self) -> None:
+        self._stopping.set()
+        if self._task is not None:
+            await self._task
+        await asyncio.to_thread(self.source.close)
+        await asyncio.to_thread(self.sink.close)
 
-    def _open_capture(self):
-        cap = cv2.VideoCapture(self.config.camera.source)
-        if not cap.isOpened():
-            cap.release()
-            return None
-        return cap
-
-    def _run(self) -> None:
-        cap = None
+    async def _run(self) -> None:
+        min_interval = 1.0 / max(self.config.inference.sample_fps, 0.1)
         last_processed = 0.0
         last_flushed = 0.0
-        min_interval = 1.0 / max(self.config.inference.sample_fps, 0.1)
 
-        while not self.stop_event.is_set():
-            if cap is None:
-                cap = self._open_capture()
-                if cap is None:
-                    self.stop_event.wait(self.config.camera.reconnect_seconds)
-                    continue
-
-            ok, frame = cap.read()
-            if not ok:
-                cap.release()
-                cap = None
-                self.stop_event.wait(self.config.camera.reconnect_seconds)
+        while not self._stopping.is_set():
+            frame = await asyncio.to_thread(self.source.read)
+            if frame is None:
+                try:
+                    await asyncio.wait_for(
+                        self._stopping.wait(),
+                        timeout=self.config.camera.reconnect_seconds,
+                    )
+                except TimeoutError:
+                    pass
                 continue
 
             now = time.monotonic()
-            if now - last_processed < min_interval:
-                continue
-            last_processed = now
+            sleep_for = min_interval - (now - last_processed)
+            if sleep_for > 0:
+                try:
+                    await asyncio.wait_for(self._stopping.wait(), timeout=sleep_for)
+                    continue
+                except TimeoutError:
+                    pass
+            last_processed = time.monotonic()
 
-            kwargs = {
-                "source": frame,
-                "persist": True,
-                "classes": [0],
-                "conf": self.config.inference.confidence,
-                "imgsz": self.config.inference.imgsz,
-                "tracker": "bytetrack.yaml",
-                "verbose": False,
-            }
-            if self.config.inference.device:
-                kwargs["device"] = self.config.inference.device
+            tracking = await asyncio.to_thread(self.tracker.track, frame)
+            roi_occupancy, events = self.analytics.update(tracking.observations, last_processed)
+            metric = MetricSample(
+                camera_id=self.config.camera.id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                visible_people=len(tracking.observations),
+                roi_occupancy=roi_occupancy,
+                flow_in=self.analytics.flow_in,
+                flow_out=self.analytics.flow_out,
+            )
 
-            result = self.model.track(**kwargs)[0]
-            observations: list[TrackObservation] = []
-
-            if result.boxes is not None and result.boxes.id is not None:
-                xyxy = result.boxes.xyxy.cpu().tolist()
-                ids = result.boxes.id.int().cpu().tolist()
-                height, width = frame.shape[:2]
-                for box, track_id in zip(xyxy, ids):
-                    x1, y1, x2, y2 = box
-                    center = (((x1 + x2) / 2) / width, ((y1 + y2) / 2) / height)
-                    observations.append(TrackObservation(track_id=track_id, center=center))
-
-            roi_occupancy, events = self.analytics.update(observations, now)
-            metric = {
-                "camera_id": self.config.camera.id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "visible_people": len(observations),
-                "roi_occupancy": roi_occupancy,
-                "flow_in": self.analytics.flow_in,
-                "flow_out": self.analytics.flow_out,
-            }
-
-            annotated = result.plot()
+            annotated = tracking.annotated_frame
             self._draw_geometry(annotated)
-            ok_jpeg, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            self._latest_metric = metric
+            self._latest_jpeg = await asyncio.to_thread(self._encode_jpeg, annotated)
 
-            with self.lock:
-                self.latest_metric = metric
-                if ok_jpeg:
-                    self.latest_jpeg = encoded.tobytes()
+            if events:
+                await asyncio.to_thread(self.sink.write_events, events)
 
-            for event in events:
-                self.storage.insert_event(asdict(event))
+            if last_processed - last_flushed >= self.config.storage.flush_interval_seconds:
+                await asyncio.to_thread(self.sink.write_metric, metric)
+                last_flushed = last_processed
 
-            if now - last_flushed >= self.config.storage.flush_interval_seconds:
-                self.storage.insert_metric(metric)
-                last_flushed = now
+    @staticmethod
+    def _encode_jpeg(frame: Frame) -> bytes | None:
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        return encoded.tobytes() if ok else None
 
-        if cap is not None:
-            cap.release()
-
-    def _draw_geometry(self, frame) -> None:
-        h, w = frame.shape[:2]
+    def _draw_geometry(self, frame: Frame) -> None:
+        height, width = frame.shape[:2]
         roi = self.config.analytics.roi
         if roi and len(roi.polygon) >= 3:
-            pts = np.array([[int(x * w), int(y * h)] for x, y in roi.polygon], dtype=np.int32)
-            cv2.polylines(frame, [pts], True, (255, 255, 255), 2)
+            points = np.array(
+                [[int(x * width), int(y * height)] for x, y in roi.polygon],
+                dtype=np.int32,
+            )
+            cv2.polylines(frame, [points], True, (255, 255, 255), 2)
 
         line = self.config.analytics.crossing_line
         if line:
-            a = (int(line.a[0] * w), int(line.a[1] * h))
-            b = (int(line.b[0] * w), int(line.b[1] * h))
+            a = (int(line.a[0] * width), int(line.a[1] * height))
+            b = (int(line.b[0] * width), int(line.b[1] * height))
             cv2.line(frame, a, b, (255, 255, 255), 2)
 
-    def snapshot_metric(self) -> dict:
-        with self.lock:
-            return dict(self.latest_metric)
+    def snapshot_metric(self) -> MetricSample:
+        return self._latest_metric
 
     def snapshot_jpeg(self) -> bytes | None:
-        with self.lock:
-            return self.latest_jpeg
+        return self._latest_jpeg
