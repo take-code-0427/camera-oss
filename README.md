@@ -2,7 +2,7 @@
 
 Turn a camera stream into anonymous foot-traffic metrics.
 
-This repository is a first proof-of-concept for converting existing camera feeds into structured pedestrian-flow data. It intentionally stores **aggregate events and metrics, not video frames**.
+FlowCam is a first proof-of-concept for converting existing camera feeds into structured pedestrian-flow data. It intentionally stores **aggregate events and metrics, not video frames**.
 
 ## What it does
 
@@ -15,17 +15,33 @@ This repository is a first proof-of-concept for converting existing camera feeds
 - Browser dashboard with a live annotated MJPEG preview
 - YAML-based camera configuration
 
+## Tooling
+
+The project uses a modern `uv`-first Python workflow:
+
+- `pyproject.toml` is the dependency/configuration source of truth
+- `uv` manages Python, virtual environments, dependencies and command execution
+- PEP 735 dependency groups are used for development tools
+- Ruff handles linting and formatting
+- pytest handles tests
+- `.python-version` pins the project Python version
+- GitHub Actions uses `uv` directly
+- Docker installs the project with `uv sync`, not `pip install`
+
 ## Quick start
 
-Python 3.11+ is recommended.
+Install [uv](https://docs.astral.sh/uv/) and then:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -e .
+git clone https://github.com/take-code-0427/camera-oss.git
+cd camera-oss
+
+uv sync
 cp config.example.yaml config.yaml
-flowcam run --config config.yaml
+uv run flowcam run --config config.yaml
 ```
+
+`uv sync` creates the local `.venv` automatically and resolves the project dependencies. The first inference run also downloads the configured Ultralytics YOLO weights.
 
 Open:
 
@@ -33,7 +49,48 @@ Open:
 - API docs: http://127.0.0.1:8000/docs
 - Latest metrics: http://127.0.0.1:8000/api/v1/metrics/latest
 
-The first run downloads the configured Ultralytics YOLO weights.
+## Dependency management
+
+Add a runtime dependency:
+
+```bash
+uv add httpx
+```
+
+Add a development dependency:
+
+```bash
+uv add --dev mypy
+```
+
+Remove a dependency:
+
+```bash
+uv remove httpx
+```
+
+Refresh the lock resolution:
+
+```bash
+uv lock
+```
+
+`uv.lock` should be committed once generated so installs and deployments use the same resolved dependency graph.
+
+## Development
+
+```bash
+uv sync --all-groups
+uv run ruff check .
+uv run ruff format .
+uv run pytest
+```
+
+Run all non-mutating CI checks locally:
+
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run pytest
+```
 
 ## Try with a video
 
@@ -166,7 +223,7 @@ A public livestream being technically accessible does **not** automatically gran
 docker compose up --build
 ```
 
-Mount or edit `config.yaml` before starting. GPU acceleration is intentionally not wired into the first Docker POC; CPU works for low sampling rates and a nano YOLO model.
+The image copies the official `uv` binary and installs the application with `uv sync`. Mount or edit `config.yaml` before starting. GPU acceleration is intentionally not wired into the first Docker POC; CPU works for low sampling rates and a nano YOLO model.
 
 ## Scope of this POC
 
