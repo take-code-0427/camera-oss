@@ -1,0 +1,33 @@
+camera:
+  id: demo
+  source: ./sample.mp4
+  reconnect_seconds: 2
+
+inference:
+  model: yolo11n.pt
+  confidence: 0.35
+  imgsz: 640
+  sample_fps: 5
+  device: null
+
+analytics:
+  roi:
+    id: sidewalk
+    polygon:
+      - [0.05, 0.10]
+      - [0.95, 0.10]
+      - [0.95, 0.95]
+      - [0.05, 0.95]
+  crossing_line:
+    id: entrance
+    a: [0.50, 0.20]
+    b: [0.50, 0.90]
+  track_ttl_seconds: 5
+
+storage:
+  sqlite_path: ./data/flowcam.db
+  flush_interval_seconds: 1
+
+server:
+  host: 0.0.0.0
+  port: 8000
