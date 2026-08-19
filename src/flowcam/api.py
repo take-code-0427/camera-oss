@@ -9,8 +9,9 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .config import AppConfig
 from .engine import FlowEngine
-from .storage import Storage
-
+from .sources import OpenCVFrameSource
+from .storage import SQLiteMetricsSink
+from .tracking import UltralyticsPersonTracker
 
 DASHBOARD_HTML = """<!doctype html>
 <html lang="en">
@@ -34,40 +35,44 @@ async function refresh(){try{const r=await fetch('/api/v1/metrics/latest');const
 
 
 def create_app(config: AppConfig) -> FastAPI:
-    storage = Storage(config.storage.sqlite_path)
-    engine = FlowEngine(config, storage)
+    source = OpenCVFrameSource(config.camera.source)
+    tracker = UltralyticsPersonTracker(config.inference)
+    sink = SQLiteMetricsSink(config.storage.sqlite_path)
+    engine = FlowEngine(config, source=source, tracker=tracker, sink=sink)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        engine.start()
-        yield
-        engine.stop()
+        await engine.start()
+        try:
+            yield
+        finally:
+            await engine.stop()
 
     app = FastAPI(title="FlowCam", version="0.1.0", lifespan=lifespan)
-    app.state.storage = storage
+    app.state.sink = sink
     app.state.engine = engine
 
     @app.get("/", response_class=HTMLResponse)
-    def dashboard():
+    async def dashboard() -> str:
         return DASHBOARD_HTML
 
     @app.get("/healthz")
-    def healthz():
+    async def healthz() -> dict[str, str]:
         return {"status": "ok", "camera_id": config.camera.id}
 
     @app.get("/api/v1/metrics/latest")
-    def latest():
-        return engine.snapshot_metric()
+    async def latest() -> dict[str, str | int]:
+        return engine.snapshot_metric().as_record()
 
     @app.get("/api/v1/metrics/history")
-    def history(minutes: int = Query(60, ge=1, le=10080)):
+    async def history(minutes: int = Query(60, ge=1, le=10080)) -> list[dict[str, object]]:
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-        return storage.history(since.isoformat())
+        return await asyncio.to_thread(sink.history, since.isoformat())
 
     @app.get("/api/v1/events")
-    def events(minutes: int = Query(60, ge=1, le=10080)):
+    async def events(minutes: int = Query(60, ge=1, le=10080)) -> list[dict[str, object]]:
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-        return storage.events(since.isoformat())
+        return await asyncio.to_thread(sink.events, since.isoformat())
 
     async def mjpeg():
         while True:
@@ -77,7 +82,7 @@ def create_app(config: AppConfig) -> FastAPI:
             await asyncio.sleep(0.1)
 
     @app.get("/api/v1/preview.mjpg")
-    def preview():
+    async def preview() -> StreamingResponse:
         return StreamingResponse(mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame")
 
     return app
