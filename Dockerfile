@@ -15,13 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Keep dependency installation cacheable independently from application source.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-editable
+    uv sync --frozen --no-editable --no-dev
 
 COPY config.example.yaml ./config.yaml
 RUN mkdir -p /app/data
