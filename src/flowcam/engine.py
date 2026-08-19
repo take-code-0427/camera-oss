@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 
 import cv2
+import numpy as np
 from ultralytics import YOLO
 
 from .analytics import FlowAnalytics, TrackObservation
@@ -35,6 +36,7 @@ class FlowEngine:
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
             return
+        self.stop_event.clear()
         self.thread = threading.Thread(target=self._run, daemon=True, name="flowcam-engine")
         self.thread.start()
 
@@ -60,14 +62,14 @@ class FlowEngine:
             if cap is None:
                 cap = self._open_capture()
                 if cap is None:
-                    time.sleep(self.config.camera.reconnect_seconds)
+                    self.stop_event.wait(self.config.camera.reconnect_seconds)
                     continue
 
             ok, frame = cap.read()
             if not ok:
                 cap.release()
                 cap = None
-                time.sleep(self.config.camera.reconnect_seconds)
+                self.stop_event.wait(self.config.camera.reconnect_seconds)
                 continue
 
             now = time.monotonic()
@@ -132,8 +134,8 @@ class FlowEngine:
         h, w = frame.shape[:2]
         roi = self.config.analytics.roi
         if roi and len(roi.polygon) >= 3:
-            pts = [[int(x * w), int(y * h)] for x, y in roi.polygon]
-            cv2.polylines(frame, [__import__("numpy").array(pts, dtype="int32")], True, (255, 255, 255), 2)
+            pts = np.array([[int(x * w), int(y * h)] for x, y in roi.polygon], dtype=np.int32)
+            cv2.polylines(frame, [pts], True, (255, 255, 255), 2)
 
         line = self.config.analytics.crossing_line
         if line:
