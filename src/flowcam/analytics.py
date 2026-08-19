@@ -1,29 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import cv2
 import numpy as np
 
 from .config import AnalyticsConfig
-
-Point = tuple[float, float]
-
-
-@dataclass(slots=True)
-class TrackObservation:
-    track_id: int
-    center: Point
-
-
-@dataclass(slots=True)
-class CrossingEvent:
-    camera_id: str
-    line_id: str
-    track_id: int
-    direction: str
-    timestamp: str
+from .domain import CrossingEvent, Point, TrackObservation
 
 
 class FlowAnalytics:
@@ -46,23 +29,30 @@ class FlowAnalytics:
         contour = np.array(polygon, dtype=np.float32)
         return cv2.pointPolygonTest(contour, point, False) >= 0
 
-    def update(self, observations: list[TrackObservation], now_monotonic: float) -> tuple[int, list[CrossingEvent]]:
+    def update(
+        self,
+        observations: list[TrackObservation],
+        now_monotonic: float,
+    ) -> tuple[int, list[CrossingEvent]]:
         events: list[CrossingEvent] = []
         roi_occupancy = 0
 
-        for obs in observations:
-            self._last_seen[obs.track_id] = now_monotonic
+        for observation in observations:
+            self._last_seen[observation.track_id] = now_monotonic
 
-            if self.config.roi and self._inside_polygon(obs.center, self.config.roi.polygon):
+            if self.config.roi and self._inside_polygon(
+                observation.center,
+                self.config.roi.polygon,
+            ):
                 roi_occupancy += 1
 
             line = self.config.crossing_line
-            if not line:
+            if line is None:
                 continue
 
-            side = self._side(obs.center, line.a, line.b)
-            previous = self._last_side.get(obs.track_id)
-            self._last_side[obs.track_id] = side
+            side = self._side(observation.center, line.a, line.b)
+            previous = self._last_side.get(observation.track_id)
+            self._last_side[observation.track_id] = side
 
             if previous is None or previous == 0 or side == 0 or previous * side >= 0:
                 continue
@@ -77,16 +67,20 @@ class FlowAnalytics:
                 CrossingEvent(
                     camera_id=self.camera_id,
                     line_id=line.id,
-                    track_id=obs.track_id,
+                    track_id=observation.track_id,
                     direction=direction,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 )
             )
 
         ttl = self.config.track_ttl_seconds
-        stale = [tid for tid, seen in self._last_seen.items() if now_monotonic - seen > ttl]
-        for tid in stale:
-            self._last_seen.pop(tid, None)
-            self._last_side.pop(tid, None)
+        stale = [
+            track_id
+            for track_id, seen_at in self._last_seen.items()
+            if now_monotonic - seen_at > ttl
+        ]
+        for track_id in stale:
+            self._last_seen.pop(track_id, None)
+            self._last_side.pop(track_id, None)
 
         return roi_occupancy, events
