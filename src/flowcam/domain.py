@@ -25,7 +25,7 @@ class CrossingEvent:
     direction: Direction
     timestamp: str
 
-    def as_record(self) -> dict[str, str | int]:
+    def as_record(self) -> dict[str, object]:
         return asdict(self)
 
 
@@ -38,7 +38,7 @@ class MetricSample:
     flow_in: int
     flow_out: int
 
-    def as_record(self) -> dict[str, str | int]:
+    def as_record(self) -> dict[str, object]:
         return asdict(self)
 
 

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from flowcam.config import AppConfig, CameraConfig, InferenceConfig, StorageConfig
-from flowcam.domain import CrossingEvent, MetricSample, TrackObservation, TrackingResult
+from flowcam.domain import CrossingEvent, MetricSample, TrackingResult, TrackObservation
 from flowcam.engine import FlowEngine
 
 

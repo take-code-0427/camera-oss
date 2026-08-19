@@ -53,7 +53,9 @@ class SQLiteMetricsSink:
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO metrics(camera_id, timestamp, visible_people, roi_occupancy, flow_in, flow_out)
+                INSERT INTO metrics(
+                    camera_id, timestamp, visible_people, roi_occupancy, flow_in, flow_out
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (

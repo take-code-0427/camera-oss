@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -30,7 +30,16 @@ body{font-family:system-ui,sans-serif;margin:0;background:#111;color:#eee}main{m
 <div class="card">Flow out<div id="out" class="value">-</div></div>
 </div><img src="/api/v1/preview.mjpg" alt="annotated preview" /></main>
 <script>
-async function refresh(){try{const r=await fetch('/api/v1/metrics/latest');const m=await r.json();visible.textContent=m.visible_people;roi.textContent=m.roi_occupancy;document.getElementById('in').textContent=m.flow_in;out.textContent=m.flow_out}catch(e){console.error(e)}}refresh();setInterval(refresh,1000);
+async function refresh(){
+  try{
+    const m=await (await fetch('/api/v1/metrics/latest')).json();
+    document.getElementById('visible').textContent=m.visible_people;
+    document.getElementById('roi').textContent=m.roi_occupancy;
+    document.getElementById('in').textContent=m.flow_in;
+    document.getElementById('out').textContent=m.flow_out;
+  }catch(e){console.error(e)}
+}
+refresh();setInterval(refresh,1000);
 </script></body></html>"""
 
 
@@ -61,17 +70,17 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"status": "ok", "camera_id": config.camera.id}
 
     @app.get("/api/v1/metrics/latest")
-    async def latest() -> dict[str, str | int]:
+    async def latest() -> dict[str, object]:
         return engine.snapshot_metric().as_record()
 
     @app.get("/api/v1/metrics/history")
     async def history(minutes: int = Query(60, ge=1, le=10080)) -> list[dict[str, object]]:
-        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        since = datetime.now(UTC) - timedelta(minutes=minutes)
         return await asyncio.to_thread(sink.history, since.isoformat())
 
     @app.get("/api/v1/events")
     async def events(minutes: int = Query(60, ge=1, le=10080)) -> list[dict[str, object]]:
-        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        since = datetime.now(UTC) - timedelta(minutes=minutes)
         return await asyncio.to_thread(sink.events, since.isoformat())
 
     async def mjpeg():

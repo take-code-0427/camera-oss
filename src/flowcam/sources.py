@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import cv2
+import numpy as np
 
 from .domain import Frame
 
@@ -29,7 +30,7 @@ class OpenCVFrameSource:
         if not ok:
             self.close()
             return None
-        return frame
+        return np.asarray(frame, dtype=np.uint8)
 
     def close(self) -> None:
         if self._capture is not None:

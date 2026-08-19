@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import cv2
 import numpy as np
@@ -69,7 +69,7 @@ class FlowAnalytics:
                     line_id=line.id,
                     track_id=observation.track_id,
                     direction=direction,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=datetime.now(UTC).isoformat(),
                 )
             )
 

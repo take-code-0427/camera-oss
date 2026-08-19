@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import cv2
 import numpy as np
@@ -28,7 +29,7 @@ class FlowEngine:
         self.analytics = FlowAnalytics(config.camera.id, config.analytics)
         self._latest_metric = MetricSample(
             camera_id=config.camera.id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             visible_people=0,
             roi_occupancy=0,
             flow_in=0,
@@ -59,13 +60,11 @@ class FlowEngine:
         while not self._stopping.is_set():
             frame = await asyncio.to_thread(self.source.read)
             if frame is None:
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(
                         self._stopping.wait(),
                         timeout=self.config.camera.reconnect_seconds,
                     )
-                except TimeoutError:
-                    pass
                 continue
 
             now = time.monotonic()
@@ -82,7 +81,7 @@ class FlowEngine:
             roi_occupancy, events = self.analytics.update(tracking.observations, last_processed)
             metric = MetricSample(
                 camera_id=self.config.camera.id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
                 visible_people=len(tracking.observations),
                 roi_occupancy=roi_occupancy,
                 flow_in=self.analytics.flow_in,

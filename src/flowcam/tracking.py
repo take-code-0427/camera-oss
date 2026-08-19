@@ -5,7 +5,7 @@ from typing import Any
 from ultralytics import YOLO
 
 from .config import InferenceConfig
-from .domain import Frame, TrackObservation, TrackingResult
+from .domain import Frame, TrackingResult, TrackObservation
 
 
 class UltralyticsPersonTracker:
@@ -30,8 +30,9 @@ class UltralyticsPersonTracker:
         observations: list[TrackObservation] = []
 
         if result.boxes is not None and result.boxes.id is not None:
-            xyxy = result.boxes.xyxy.cpu().tolist()
-            ids = result.boxes.id.int().cpu().tolist()
+            boxes = result.boxes.cpu().numpy()
+            xyxy = boxes.xyxy.tolist()
+            ids = boxes.id.astype(int).tolist()
             height, width = frame.shape[:2]
             for box, track_id in zip(xyxy, ids, strict=True):
                 x1, y1, x2, y2 = box
