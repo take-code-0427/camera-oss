@@ -2,35 +2,37 @@
 
 Turn a camera stream into anonymous foot-traffic metrics.
 
-FlowCam is a first proof-of-concept for converting existing camera feeds into structured pedestrian-flow data. It intentionally stores **aggregate events and metrics, not video frames**.
+FlowCam is a proof-of-concept for converting existing camera feeds into structured pedestrian-flow data. It intentionally persists **aggregate events and metrics, not video frames**.
 
 ## What it does
 
-- MP4 / local video / HLS input via OpenCV
-- Person detection + tracking with Ultralytics YOLO and ByteTrack
+- MP4 / local video / HLS input through an OpenCV adapter
+- Person detection + ByteTrack through an Ultralytics adapter
 - ROI occupancy counting
 - Bidirectional line-crossing (`in` / `out`) counting
-- SQLite time-series storage
+- SQLite time-series storage through a sink adapter
 - FastAPI endpoints for latest metrics and history
-- Browser dashboard with a live annotated MJPEG preview
+- Browser dashboard with an annotated MJPEG development preview
 - YAML-based camera configuration
 
 ## Tooling
 
-The project uses a modern `uv`-first Python workflow:
+The repository uses a modern `uv`-first Python workflow:
 
-- `pyproject.toml` is the dependency/configuration source of truth
-- `uv` manages Python, virtual environments, dependencies and command execution
-- PEP 735 dependency groups are used for development tools
-- Ruff handles linting and formatting
-- pytest handles tests
-- `.python-version` pins the project Python version
-- GitHub Actions uses `uv` directly
-- Docker installs the project with `uv sync`, not `pip install`
+- Python 3.12 pinned by `.python-version`
+- `pyproject.toml` as the dependency/configuration source of truth
+- `uv` for Python, virtualenv, dependency management, execution and builds
+- PEP 735 dependency groups for development tools
+- `uv_build` as the build backend
+- Ruff for linting and formatting
+- ty for static type checking
+- pytest for tests
+- GitHub Actions using `astral-sh/setup-uv`
+- Docker using the official uv binary and `uv sync`
 
 ## Quick start
 
-Install [uv](https://docs.astral.sh/uv/) and then:
+Install uv, then:
 
 ```bash
 git clone https://github.com/take-code-0427/camera-oss.git
@@ -41,41 +43,13 @@ cp config.example.yaml config.yaml
 uv run flowcam run --config config.yaml
 ```
 
-`uv sync` creates the local `.venv` automatically and resolves the project dependencies. The first inference run also downloads the configured Ultralytics YOLO weights.
-
 Open:
 
 - Dashboard: http://127.0.0.1:8000/
 - API docs: http://127.0.0.1:8000/docs
 - Latest metrics: http://127.0.0.1:8000/api/v1/metrics/latest
 
-## Dependency management
-
-Add a runtime dependency:
-
-```bash
-uv add httpx
-```
-
-Add a development dependency:
-
-```bash
-uv add --dev mypy
-```
-
-Remove a dependency:
-
-```bash
-uv remove httpx
-```
-
-Refresh the lock resolution:
-
-```bash
-uv lock
-```
-
-`uv.lock` should be committed once generated so installs and deployments use the same resolved dependency graph.
+The first inference run downloads the configured Ultralytics model weights.
 
 ## Development
 
@@ -83,13 +57,80 @@ uv lock
 uv sync --all-groups
 uv run ruff check .
 uv run ruff format .
+uv run ty check src tests
 uv run pytest
 ```
 
-Run all non-mutating CI checks locally:
+Add dependencies with uv rather than editing lock state manually:
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run pytest
+uv add httpx
+uv add --dev pytest-cov
+uv remove httpx
+uv lock
+```
+
+`uv.lock` should be committed after dependency resolution so local development, CI and Docker use the same resolved graph.
+
+## Architecture
+
+The core is deliberately adapter-based rather than coupling OpenCV, YOLO and SQLite into one engine.
+
+```text
+                    +-------------------+
+Video / HLS ------> | FrameSource       |
+                    | OpenCV adapter    |
+                    +---------+---------+
+                              |
+                              v
+                    +-------------------+
+                    | PersonTracker     |
+                    | Ultralytics       |
+                    | YOLO + ByteTrack  |
+                    +---------+---------+
+                              |
+                              v
+                    +-------------------+
+                    | FlowAnalytics     |
+                    | pure domain logic |
+                    +---------+---------+
+                              |
+                  MetricSample / CrossingEvent
+                              |
+                              v
+                    +-------------------+
+                    | MetricsSink       |
+                    | SQLite adapter    |
+                    +-------------------+
+```
+
+`FrameSource`, `PersonTracker` and `MetricsSink` are Python `Protocol`s. The orchestration layer depends on those interfaces, not concrete libraries.
+
+This makes the next adapters straightforward:
+
+- JPEG snapshot source
+- RTSP-specific source
+- prerecorded/test source
+- ONNX / TensorRT tracker
+- PostgreSQL / TimescaleDB / ClickHouse sink
+- Kafka / NATS event sink
+
+The runtime itself is async. OpenCV, inference and SQLite remain blocking libraries, so the engine executes those boundaries with `asyncio.to_thread()` while FastAPI and lifecycle management remain on the event loop.
+
+## Project layout
+
+```text
+src/flowcam/
+  api.py         FastAPI transport / lifespan wiring
+  analytics.py   ROI + line-crossing domain logic
+  cli.py         CLI entry point
+  config.py      Pydantic configuration models
+  domain.py      typed domain records
+  engine.py      async orchestration pipeline
+  ports.py       Protocol interfaces
+  sources.py     camera/video input adapters
+  storage.py     persistence adapters
+  tracking.py    detector/tracker adapters
 ```
 
 ## Try with a video
@@ -102,7 +143,7 @@ camera:
   source: ./sample.mp4
 ```
 
-For HLS, use the playlist URL directly:
+For HLS:
 
 ```yaml
 camera:
@@ -152,70 +193,30 @@ server:
   port: 8000
 ```
 
-`in` and `out` are defined by the sign change relative to the directed line from `a` to `b`. If the direction is backwards for your camera, swap `a` and `b`.
+`in` and `out` are defined by the sign change relative to the directed line from `a` to `b`. Swap `a` and `b` if the direction is reversed for a camera.
 
 ## API
 
-### `GET /api/v1/metrics/latest`
+- `GET /healthz`
+- `GET /api/v1/metrics/latest`
+- `GET /api/v1/metrics/history?minutes=60`
+- `GET /api/v1/events?minutes=60`
+- `GET /api/v1/preview.mjpg`
 
-```json
-{
-  "camera_id": "demo",
-  "timestamp": "2026-08-19T04:30:00+00:00",
-  "visible_people": 12,
-  "roi_occupancy": 8,
-  "flow_in": 3,
-  "flow_out": 1
-}
-```
-
-### `GET /api/v1/metrics/history?minutes=60`
-
-Returns the stored metric samples for the requested lookback window.
-
-### `GET /api/v1/events?minutes=60`
-
-Returns individual line-crossing events (`in` / `out`).
-
-### `GET /api/v1/preview.mjpg`
-
-Annotated MJPEG preview for POC/debugging. Disable or remove this endpoint in deployments where video must never leave the edge device.
-
-## Architecture
-
-```text
-Video / HLS
-    |
-    v
-OpenCV capture
-    |
-    v
-YOLO + ByteTrack
-    |
-    +--> ROI occupancy
-    |
-    +--> trajectory side-change --> line crossing events
-    |
-    v
-in-memory latest state
-    |
-    +--> SQLite metrics/events
-    |
-    +--> FastAPI --> JSON API / dashboard
-```
+The preview endpoint exists for POC/debugging. A production edge deployment should normally expose only aggregate data.
 
 ## Privacy model
 
-The intended production architecture is **edge-first aggregation**:
+The intended production architecture is edge-first aggregation:
 
 1. Decode frames locally.
 2. Detect and track only long enough to compute aggregate metrics.
 3. Use ephemeral tracker IDs; do not create persistent person identities.
 4. Do not perform face recognition.
 5. Persist counts/events rather than raw frames.
-6. Treat the preview endpoint as a development-only feature.
+6. Disable the preview endpoint when raw video must not leave the edge device.
 
-A public livestream being technically accessible does **not** automatically grant rights to reuse, republish, or commercially analyze it. Verify the stream operator's license/terms and applicable privacy rules before using a real camera feed.
+A public livestream being technically accessible does not automatically grant rights to reuse, republish or commercially analyze it. Verify the stream operator's license/terms and applicable privacy rules before using a real feed.
 
 ## Docker
 
@@ -223,11 +224,9 @@ A public livestream being technically accessible does **not** automatically gran
 docker compose up --build
 ```
 
-The image copies the official `uv` binary and installs the application with `uv sync`. Mount or edit `config.yaml` before starting. GPU acceleration is intentionally not wired into the first Docker POC; CPU works for low sampling rates and a nano YOLO model.
+The image uses the official uv binary and `uv sync`; it does not install the application with pip.
 
-## Scope of this POC
-
-This version is intentionally small. Next useful steps are:
+## Next steps
 
 - JPEG snapshot adapter
 - native RTSP reconnect/backoff tuning
